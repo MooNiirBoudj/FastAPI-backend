@@ -39,7 +39,7 @@ except Exception as e:
     print(f"Error loading one-hot encoder: {str(e)}")
     onehot_encoder = None
 
-# Load training feature names if available
+# Load training feature names/columns in exact order
 try:
     with open("training_feature_names.pkl", "rb") as f:
         training_feature_names = pickle.load(f)
@@ -60,7 +60,7 @@ except Exception as e:
         training_feature_indices = [0, 64, 3, 4, 44, 46, 18, 50, 20, 56, 25, 58, 24]  # Your actual indices
         print(f"Using hardcoded feature indices: {len(training_feature_indices)} features")
 
-app = FastAPI(title="Logistic Regression API & Gemini Career Assessment")
+app = FastAPI(title="Logistic Regression API")
 
 # Add CORS middleware
 app.add_middleware(
@@ -90,15 +90,18 @@ def normalize_text(text):
         return text
     return text.replace("'", "'").replace(""", "\"").replace(""", "\"")
 
-# -------------------- Feature alignment function --------------------
+# -------------------- Enhanced Feature alignment function --------------------
 def align_features_with_training(df, training_feature_names=None, training_feature_indices=None):
     """
-    Align test data features with training data features.
-    Can work with either feature names or feature indices.
+    Align test data features with training data features ensuring exact order and feature matching.
     """
+    print(f"Input DataFrame shape: {df.shape}")
+    print(f"Input DataFrame columns: {list(df.columns)}")
+    
     if training_feature_names is not None:
-        # Use feature names approach
-        print("Aligning features using feature names")
+        # Method 1: Use feature names approach (RECOMMENDED)
+        print("Aligning features using feature names (exact order preservation)")
+        
         current_features = set(df.columns)
         expected_features = set(training_feature_names)
         
@@ -106,78 +109,187 @@ def align_features_with_training(df, training_feature_names=None, training_featu
         missing_features = expected_features - current_features
         extra_features = current_features - expected_features
         
+        print(f"Current features: {len(current_features)}")
+        print(f"Expected features: {len(expected_features)}")
+        print(f"Missing features: {len(missing_features)} - {list(missing_features)[:5]}...")
+        print(f"Extra features: {len(extra_features)} - {list(extra_features)[:5]}...")
+        
+        # Add missing features with zeros
         if missing_features:
             print(f"Adding {len(missing_features)} missing features with zeros")
             for feature in missing_features:
                 df[feature] = 0
         
+        # Remove extra features
         if extra_features:
             print(f"Removing {len(extra_features)} extra features")
             df = df.drop(columns=list(extra_features))
         
-        # Reorder columns to match training order
-        df = df[training_feature_names]
+        # CRITICAL: Reorder columns to match EXACT training order
+        try:
+            df = df[training_feature_names]
+            print(f"Features reordered to match training set exactly")
+        except KeyError as e:
+            print(f"Error reordering features: {e}")
+            # Fallback: select only available features in training order
+            available_features = [f for f in training_feature_names if f in df.columns]
+            df = df[available_features]
+            print(f"Used available features in training order: {len(available_features)}")
         
     elif training_feature_indices is not None:
-        # Use feature indices approach
+        # Method 2: Use feature indices approach
         print("Aligning features using feature indices")
         print(f"Total available features: {df.shape[1]}")
-        print(f"Required feature indices: {len(training_feature_indices)}")
+        print(f"Required feature indices: {training_feature_indices}")
         
         # Check if all required indices are available
         max_required_index = max(training_feature_indices)
         if max_required_index >= df.shape[1]:
-            print(f"Available features: {df.shape[1]}")
+            available_features = df.shape[1]
+            print(f"ERROR: Available features: {available_features}")
             print(f"Required max index: {max_required_index}")
-            print(f"Feature indices: {training_feature_indices}")
-            raise ValueError(f"Required feature index {max_required_index} exceeds available features ({df.shape[1]}). You may need to check your encoding process.")
+            print(f"Required indices: {training_feature_indices}")
+            raise ValueError(f"Required feature index {max_required_index} exceeds available features ({available_features})")
         
-        # Select only the required features by index
+        # Select only the required features by index IN THE EXACT ORDER
         df = df.iloc[:, training_feature_indices]
-        print(f"Selected features by indices: {df.shape}")
+        print(f"Selected features by indices in exact order: {df.shape}")
         
     else:
-        print("Warning: No training feature alignment info available, using all features")
+        print("WARNING: No training feature alignment info available!")
+        print("Using all available features - this may cause prediction errors")
     
     print(f"Final aligned features shape: {df.shape}")
+    print(f"Final feature order: {list(df.columns)[:10]}...")  # Show first 10 features
     return df
+
+# -------------------- Enhanced encoding pipeline --------------------
+def encode_features_to_match_training(df, ordinal_encoder, onehot_encoder, ordinal_columns):
+    """
+    Encode features in the exact same way as training data to ensure feature alignment.
+    """
+    print("\n--- Starting feature encoding pipeline ---")
+    
+    # Step 1: Apply ordinal encoding
+    print("Step 1: Applying ordinal encoding")
+    df_ordinal = df[ordinal_columns].copy()
+    
+    # Debug: Show values being encoded
+    print("Ordinal values to encode:")
+    for col in ordinal_columns:
+        if col in df_ordinal.columns:
+            print(f"  {col}: {df_ordinal[col].iloc[0]}")
+    
+    try:
+        df_ordinal_encoded = pd.DataFrame(
+            ordinal_encoder.transform(df_ordinal),
+            columns=ordinal_columns,
+            index=df.index
+        )
+        print(f"Ordinal encoding complete: {df_ordinal_encoded.shape}")
+    except Exception as e:
+        print(f"Ordinal encoding error: {e}")
+        print("Available categories in ordinal encoder:")
+        for i, col in enumerate(ordinal_columns):
+            if i < len(ordinal_encoder.categories_):
+                print(f"  {col}: {ordinal_encoder.categories_[i]}")
+        raise
+
+    # Step 2: Apply one-hot encoding to categorical columns
+    print("Step 2: Applying one-hot encoding")
+    categorical_columns = [col for col in df.columns if col not in ordinal_columns]
+    print(f"Categorical columns ({len(categorical_columns)}): {categorical_columns}")
+    
+    if categorical_columns:
+        df_categorical = df[categorical_columns].copy()
+        
+        # Debug: Show values being encoded
+        print("Categorical values to encode:")
+        for col in categorical_columns:
+            if col in df_categorical.columns:
+                print(f"  {col}: {df_categorical[col].iloc[0]}")
+        
+        try:
+            # Transform and get feature names
+            onehot_encoded = onehot_encoder.transform(df_categorical)
+            onehot_feature_names = onehot_encoder.get_feature_names_out(categorical_columns)
+            
+            df_onehot_encoded = pd.DataFrame(
+                onehot_encoded,
+                columns=onehot_feature_names,
+                index=df.index
+            )
+            print(f"One-hot encoding complete: {df_onehot_encoded.shape}")
+            print(f"One-hot feature names (first 10): {list(onehot_feature_names)[:10]}")
+            
+        except Exception as e:
+            print(f"One-hot encoding error: {e}")
+            print("Available categories in one-hot encoder:")
+            try:
+                for i, col in enumerate(categorical_columns):
+                    if hasattr(onehot_encoder, 'categories_') and i < len(onehot_encoder.categories_):
+                        print(f"  {col}: {onehot_encoder.categories_[i][:5]}...")  # Show first 5 categories
+            except:
+                print("Could not display one-hot encoder categories")
+            raise
+    else:
+        print("No categorical columns found")
+        df_onehot_encoded = pd.DataFrame(index=df.index)
+
+    # Step 3: Combine encoded features in consistent order
+    print("Step 3: Combining encoded features")
+    try:
+        # Always combine in the same order: ordinal first, then one-hot
+        final_df = pd.concat([
+            df_ordinal_encoded.reset_index(drop=True),
+            df_onehot_encoded.reset_index(drop=True)
+        ], axis=1)
+        print(f"Features combined successfully: {final_df.shape}")
+        print(f"Combined feature order (first 10): {list(final_df.columns)[:10]}")
+        
+        return final_df
+        
+    except Exception as e:
+        print(f"Error combining encoded features: {e}")
+        raise
 
 # -------------------- Home --------------------
 @app.get("/")
 def read_root():
-    return {"message": "FastAPI App: Logistic Regression API & Gemini Career Assessment"}
+    return {"message": "FastAPI App: Logistic Regression API"}
 
-# -------------------- Logistic Regression Route --------------------
+# -------------------- Enhanced Logistic Regression Route --------------------
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(data: AnswersData):
     try:
-        print("\n--- New prediction request received ---")
+        print("\n" + "="*50)
+        print("NEW PREDICTION REQUEST")
+        print("="*50)
         
         # Check if model and encoders are loaded
         if lr_model is None or ordinal_encoder is None or onehot_encoder is None:
             raise HTTPException(status_code=500, detail="Model or encoders not loaded. Check server logs.")
         
         answers = data.answers
-        print(f"Answers keys: {list(answers.keys()) if answers else 'None'}")
+        print(f"Received answers for {len(answers)} questions")
         
         # Create DataFrame
         try:
             df = pd.DataFrame([answers])
-            print(f"Created DataFrame with shape: {df.shape}")
-            print(f"DataFrame columns: {list(df.columns)}")
+            print(f"Created DataFrame: {df.shape}")
         except Exception as e:
             print(f"Error creating DataFrame: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Error creating DataFrame: {str(e)}")
 
-        # Clean up any curly quotes and strip whitespace
+        # Clean up text
         try:
             df = df.applymap(lambda x: normalize_text(x) if isinstance(x, str) else x)
-            print("Normalized text in DataFrame")
+            print("Text normalization complete")
         except Exception as e:
             print(f"Error normalizing text: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Error normalizing text: {str(e)}")
 
-        # Define ordinal columns (these should match exactly what was used during training)
+        # Define ordinal columns (MUST match training exactly)
         ordinal_columns = [
             "Do you enjoy and feel comfortable with subjects like mathematics, physics, and biology?",
             "Are you excited by combining theoretical learning with hands-on practical work?",
@@ -186,80 +298,36 @@ async def predict(data: AnswersData):
             "How do you feel about public speaking or presenting?"
         ]
         
-        # Check if all ordinal columns are present
-        missing_ordinal_columns = [col for col in ordinal_columns if col not in df.columns]
-        if missing_ordinal_columns:
-            print(f"Missing required ordinal columns: {missing_ordinal_columns}")
-            raise HTTPException(status_code=400, detail=f"Missing required ordinal columns: {missing_ordinal_columns}")
+        # Validate ordinal columns
+        missing_ordinal = [col for col in ordinal_columns if col not in df.columns]
+        if missing_ordinal:
+            print(f"Missing ordinal columns: {missing_ordinal}")
+            raise HTTPException(status_code=400, detail=f"Missing required columns: {missing_ordinal}")
 
-        # Apply ordinal encoding
+        # Apply encoding pipeline
+        print("\n--- ENCODING PIPELINE ---")
         try:
-            print("Applying ordinal encoding")
-            df_ordinal = df[ordinal_columns].copy()
-            df_ordinal_encoded = pd.DataFrame(
-                ordinal_encoder.transform(df_ordinal),
-                columns=ordinal_columns,
-                index=df.index
+            encoded_df = encode_features_to_match_training(
+                df, ordinal_encoder, onehot_encoder, ordinal_columns
             )
-            print("Ordinal encoding complete")
         except Exception as e:
-            print(f"Error in ordinal encoding: {str(e)}")
-            print(f"Ordinal encoder categories: {ordinal_encoder.categories_}")
-            print(f"Data values: {df[ordinal_columns].values}")
-            raise HTTPException(status_code=400, detail=f"Error in ordinal encoding: {str(e)}")
-
-        # Apply one-hot encoding to categorical columns
-        try:
-            categorical_columns = [col for col in df.columns if col not in ordinal_columns]
-            print(f"Categorical columns ({len(categorical_columns)}): {categorical_columns}")
-            
-            if categorical_columns:
-                print("Applying one-hot encoding")
-                df_categorical = df[categorical_columns].copy()
-                
-                # Transform and get feature names
-                onehot_encoded = onehot_encoder.transform(df_categorical)
-                onehot_feature_names = onehot_encoder.get_feature_names_out(categorical_columns)
-                
-                df_onehot_encoded = pd.DataFrame(
-                    onehot_encoded,
-                    columns=onehot_feature_names,
-                    index=df.index
-                )
-                print(f"One-hot encoded shape: {df_onehot_encoded.shape}")
-            else:
-                print("No categorical columns to encode")
-                df_onehot_encoded = pd.DataFrame(index=df.index)
-                
-        except Exception as e:
-            print(f"Error in one-hot encoding: {str(e)}")
+            print(f"Encoding pipeline failed: {str(e)}")
             print(traceback.format_exc())
-            raise HTTPException(status_code=400, detail=f"Error in one-hot encoding: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Feature encoding failed: {str(e)}")
 
-        # Combine all encoded features
+        # Apply feature alignment
+        print("\n--- FEATURE ALIGNMENT ---")
         try:
-            print("Combining encoded features")
-            final_df = pd.concat([
-                df_ordinal_encoded.reset_index(drop=True),
-                df_onehot_encoded.reset_index(drop=True)
-            ], axis=1)
-            print(f"Combined features shape: {final_df.shape}")
-            print(f"Combined feature names: {list(final_df.columns)}")
+            final_df = align_features_with_training(
+                encoded_df, training_feature_names, training_feature_indices
+            )
+            print(f"Feature alignment complete: {final_df.shape}")
         except Exception as e:
-            print(f"Error combining encoded features: {str(e)}")
-            raise HTTPException(status_code=400, detail=f"Error combining encoded features: {str(e)}")
-
-        # Align features with training data
-        try:
-            print("Aligning features with training data")
-            final_df = align_features_with_training(final_df, training_feature_names, training_feature_indices)
-            print(f"Final aligned DataFrame shape: {final_df.shape}")
-        except Exception as e:
-            print(f"Error aligning features: {str(e)}")
+            print(f"Feature alignment failed: {str(e)}")
             print(traceback.format_exc())
-            raise HTTPException(status_code=400, detail=f"Error aligning features: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Feature alignment failed: {str(e)}")
         
-        # Mapping of class indices to field names
+        # Field mapping
         label_map = {
             0: "Law",
             1: "Agriculture", 
@@ -269,32 +337,42 @@ async def predict(data: AnswersData):
         }
 
         # Make prediction
+        print("\n--- MAKING PREDICTION ---")
         try:
-            print("Making prediction with Logistic Regression model")
-            print(f"Input shape for prediction: {final_df.shape}")
+            print(f"Final input shape: {final_df.shape}")
+            print(f"Model expects: {getattr(lr_model, 'n_features_in_', 'unknown')} features")
+            
+            # Ensure data types are correct
+            final_df = final_df.astype(float)
             
             prediction = lr_model.predict(final_df)
             predicted_class = int(prediction[0])
             predicted_field = label_map.get(predicted_class, "Unknown")
-            print(f"Predicted class: {predicted_class}, field: {predicted_field}")
+            
+            print(f"Prediction successful!")
+            print(f"Predicted class: {predicted_class}")
+            print(f"Predicted field: {predicted_field}")
 
             # Get probabilities
             try:
                 probabilities = lr_model.predict_proba(final_df)[0]
                 probs_dict = {label_map[i]: float(prob) for i, prob in enumerate(probabilities)}
-                print(f"Prediction probabilities: {probs_dict}")
+                print(f"Probabilities: {probs_dict}")
             except Exception as e:
-                print(f"Warning: Could not get prediction probabilities: {str(e)}")
+                print(f"Warning: Could not get probabilities: {str(e)}")
                 probs_dict = {}
                 
         except Exception as e:
-            print(f"Error making prediction: {str(e)}")
-            print(f"Model expects features: {getattr(lr_model, 'n_features_in_', 'unknown')}")
-            print(f"Provided features: {final_df.shape[1]}")
+            print(f"Prediction failed: {str(e)}")
+            print(f"Input shape: {final_df.shape}")
+            print(f"Input dtypes: {final_df.dtypes.value_counts()}")
             print(traceback.format_exc())
-            raise HTTPException(status_code=400, detail=f"Error making prediction: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Prediction failed: {str(e)}")
 
-        print("Prediction completed successfully")
+        print("\n" + "="*50)
+        print("PREDICTION COMPLETED SUCCESSFULLY")
+        print("="*50)
+        
         return {
             "prediction": predicted_class,
             "field": predicted_field,
@@ -304,7 +382,7 @@ async def predict(data: AnswersData):
     except HTTPException:
         raise  # Re-raise HTTP exceptions
     except Exception as e:
-        print(f"Unexpected error in predict route: {str(e)}")
+        print(f"Unexpected error: {str(e)}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
