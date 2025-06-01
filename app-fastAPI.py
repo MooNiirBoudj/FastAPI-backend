@@ -44,9 +44,21 @@ try:
     with open("training_feature_names.pkl", "rb") as f:
         training_feature_names = pickle.load(f)
     print(f"Training feature names loaded: {len(training_feature_names)} features")
+    training_feature_indices = None
 except Exception as e:
     print(f"Warning: Could not load training feature names: {str(e)}")
     training_feature_names = None
+    
+    # If feature names not available, try to load feature indices
+    try:
+        with open("training_feature_indices.pkl", "rb") as f:
+            training_feature_indices = pickle.load(f)
+        print(f"Training feature indices loaded: {len(training_feature_indices)} features")
+    except Exception as e:
+        print(f"Warning: Could not load training feature indices: {str(e)}")
+        # Fallback: define your feature indices manually here
+        training_feature_indices = [0, 64, 3, 4, 44, 46, 18, 50, 20, 56, 25, 58, 24]  # Your actual indices
+        print(f"Using hardcoded feature indices: {len(training_feature_indices)} features")
 
 app = FastAPI(title="Logistic Regression API & Gemini Career Assessment")
 
@@ -79,34 +91,53 @@ def normalize_text(text):
     return text.replace("'", "'").replace(""", "\"").replace(""", "\"")
 
 # -------------------- Feature alignment function --------------------
-def align_features_with_training(df, training_feature_names):
+def align_features_with_training(df, training_feature_names=None, training_feature_indices=None):
     """
     Align test data features with training data features.
-    Add missing columns with zeros and remove extra columns.
+    Can work with either feature names or feature indices.
     """
-    if training_feature_names is None:
-        print("Warning: No training feature names available, using current features")
-        return df
-    
-    # Get current feature names
-    current_features = set(df.columns)
-    expected_features = set(training_feature_names)
-    
-    # Find missing and extra features
-    missing_features = expected_features - current_features
-    extra_features = current_features - expected_features
-    
-    if missing_features:
-        print(f"Adding {len(missing_features)} missing features with zeros")
-        for feature in missing_features:
-            df[feature] = 0
-    
-    if extra_features:
-        print(f"Removing {len(extra_features)} extra features")
-        df = df.drop(columns=list(extra_features))
-    
-    # Reorder columns to match training order
-    df = df[training_feature_names]
+    if training_feature_names is not None:
+        # Use feature names approach
+        print("Aligning features using feature names")
+        current_features = set(df.columns)
+        expected_features = set(training_feature_names)
+        
+        # Find missing and extra features
+        missing_features = expected_features - current_features
+        extra_features = current_features - expected_features
+        
+        if missing_features:
+            print(f"Adding {len(missing_features)} missing features with zeros")
+            for feature in missing_features:
+                df[feature] = 0
+        
+        if extra_features:
+            print(f"Removing {len(extra_features)} extra features")
+            df = df.drop(columns=list(extra_features))
+        
+        # Reorder columns to match training order
+        df = df[training_feature_names]
+        
+    elif training_feature_indices is not None:
+        # Use feature indices approach
+        print("Aligning features using feature indices")
+        print(f"Total available features: {df.shape[1]}")
+        print(f"Required feature indices: {len(training_feature_indices)}")
+        
+        # Check if all required indices are available
+        max_required_index = max(training_feature_indices)
+        if max_required_index >= df.shape[1]:
+            print(f"Available features: {df.shape[1]}")
+            print(f"Required max index: {max_required_index}")
+            print(f"Feature indices: {training_feature_indices}")
+            raise ValueError(f"Required feature index {max_required_index} exceeds available features ({df.shape[1]}). You may need to check your encoding process.")
+        
+        # Select only the required features by index
+        df = df.iloc[:, training_feature_indices]
+        print(f"Selected features by indices: {df.shape}")
+        
+    else:
+        print("Warning: No training feature alignment info available, using all features")
     
     print(f"Final aligned features shape: {df.shape}")
     return df
@@ -221,7 +252,7 @@ async def predict(data: AnswersData):
         # Align features with training data
         try:
             print("Aligning features with training data")
-            final_df = align_features_with_training(final_df, training_feature_names)
+            final_df = align_features_with_training(final_df, training_feature_names, training_feature_indices)
             print(f"Final aligned DataFrame shape: {final_df.shape}")
         except Exception as e:
             print(f"Error aligning features: {str(e)}")
@@ -279,4 +310,7 @@ async def predict(data: AnswersData):
 
 # -------------------- Run App --------------------
 if __name__ == '__main__':
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    print("Starting FastAPI server...")
+    print("Server will be available at: http://localhost:8000")
+    print("API documentation at: http://localhost:8000/docs")
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
