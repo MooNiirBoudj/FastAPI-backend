@@ -56,8 +56,7 @@ except Exception as e:
         print(f"Training feature indices loaded: {len(training_feature_indices)} features")
     except Exception as e:
         print(f"Warning: Could not load training feature indices: {str(e)}")
-        # Fallback: define your feature indices manually here
-        training_feature_indices = [0, 64, 3, 4, 44, 46, 18, 50, 20, 56, 25, 58, 24]  # Your actual indices
+        training_feature_indices = [0, 6, 13, 18, 30, 37, 44, 46, 50, 52, 56, 57, 58, 64] 
         print(f"Using hardcoded feature indices: {len(training_feature_indices)} features")
 
 app = FastAPI(title="Logistic Regression API")
@@ -391,4 +390,4 @@ if __name__ == '__main__':
     print("Starting FastAPI server...")
     print("Server will be available at: http://localhost:8000")
     print("API documentation at: http://localhost:8000/docs")
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("app-fastAPI:app", host="127.0.0.1", port=8000, reload=True)
